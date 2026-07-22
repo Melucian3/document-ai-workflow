@@ -1,0 +1,279 @@
+{
+  "name": "My workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "operation": "toBinary",
+        "sourceProperty": "body.archivo_base64",
+        "options": {
+          "fileName": "factura.pdf",
+          "mimeType": "application/pdf"
+        }
+      },
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        208,
+        0
+      ],
+      "id": "4d835089-8b1f-474f-a9a2-3a0e12777da5",
+      "name": "Convert to File"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "f64c98a8-4cdd-41c8-a0c7-93c43295b4ff",
+              "leftValue": "={{ $json.total }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            },
+            {
+              "id": "d90dc76c-2f7f-48aa-a290-11f55e510ddc",
+              "leftValue": "={{ $json.fecha }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "c0587841-489d-41d3-80cd-9c8ec425c505",
+              "leftValue": "={{ $json.id_documento }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        976,
+        0
+      ],
+      "id": "4f80ce57-eab1-4791-b69d-013b468f5a60",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "98e103be-642e-47be-bec2-155cf10a483f",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "2588b6b6-6ff0-4192-b036-86ada0022b1f",
+      "name": "Webhook",
+      "webhookId": "98e103be-642e-47be-bec2-155cf10a483f"
+    },
+    {
+      "parameters": {
+        "resource": "document",
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-3.1-flash-lite",
+          "mode": "list",
+          "cachedResultName": "models/gemini-3.1-flash-lite"
+        },
+        "text": "Extrae únicamente estos campos del documento.\n\nDevuelve SOLO un JSON válido.\n\n{\n  \"id_documento\": \"\",\n  \"total\": \"\",\n  \"fecha\": \"\"\n}",
+        "inputType": "binary",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        416,
+        0
+      ],
+      "id": "c10c7141-2827-475c-a285-1fe0f8a7d4e9",
+      "name": "Analyze document",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "OWnDoAa4TyerbqRu",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\n\n// Obtener el texto que devolvió Gemini\nconst rawText = input?.content?.parts?.[0]?.text;\n\nif (!rawText) {\n  return [\n    {\n      json: {\n        id_documento: null,\n        total: null,\n        fecha: null,\n        error: \"Gemini no devolvió contenido de texto\"\n      }\n    }\n  ];\n}\n\n// Quitar los bloques ```json ... ```\nconst cleanText = rawText\n  .replace(/```json/gi, \"\")\n  .replace(/```/g, \"\")\n  .trim();\n\nlet extracted;\n\ntry {\n  extracted = JSON.parse(cleanText);\n} catch (error) {\n  return [\n    {\n      json: {\n        id_documento: null,\n        total: null,\n        fecha: null,\n        error: \"La respuesta de Gemini no contiene un JSON válido\"\n      }\n    }\n  ];\n}\n\n// Normalizar el ID\nconst idDocumento =\n  extracted.id_documento !== null &&\n  extracted.id_documento !== undefined\n    ? String(extracted.id_documento).trim()\n    : null;\n\n// Normalizar el total:\n// \"60.000,00\" -> 60000.00\n// \"$ 60.000,00\" -> 60000.00\nlet totalNormalizado = null;\n\nif (\n  extracted.total !== null &&\n  extracted.total !== undefined &&\n  extracted.total !== \"\"\n) {\n  const totalTexto = String(extracted.total)\n    .replace(/[^\\d,.-]/g, \"\")\n    .trim();\n\n  let numeroTexto;\n\n  if (totalTexto.includes(\",\") && totalTexto.includes(\".\")) {\n    // Formato argentino: 60.000,00\n    numeroTexto = totalTexto\n      .replace(/\\./g, \"\")\n      .replace(\",\", \".\");\n  } else if (totalTexto.includes(\",\")) {\n    // Formato: 60000,00\n    numeroTexto = totalTexto.replace(\",\", \".\");\n  } else {\n    // Formato: 60000.00 o 60000\n    numeroTexto = totalTexto;\n  }\n\n  const numero = Number(numeroTexto);\n\n  if (Number.isFinite(numero)) {\n    totalNormalizado = numero;\n  }\n}\n\n// Normalizar la fecha:\n// \"22/07/2026\" -> \"2026-07-22\"\n// Si ya viene como YYYY-MM-DD, la conserva\nlet fechaNormalizada = null;\n\nif (\n  extracted.fecha !== null &&\n  extracted.fecha !== undefined &&\n  extracted.fecha !== \"\"\n) {\n  const fechaTexto = String(extracted.fecha).trim();\n\n  if (/^\\d{4}-\\d{2}-\\d{2}$/.test(fechaTexto)) {\n    fechaNormalizada = fechaTexto;\n  } else {\n    const match = fechaTexto.match(\n      /^(\\d{1,2})[\\/.-](\\d{1,2})[\\/.-](\\d{4})$/\n    );\n\n    if (match) {\n      const [, dia, mes, anio] = match;\n\n      fechaNormalizada =\n        `${anio}-${mes.padStart(2, \"0\")}-${dia.padStart(2, \"0\")}`;\n    }\n  }\n}\n\nreturn [\n  {\n    json: {\n      id_documento: idDocumento,\n      total: totalNormalizado,\n      fecha: fechaNormalizada\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        624,
+        0
+      ],
+      "id": "03e1557d-4e15-4455-a773-3321c5c063c9",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1184,
+        -96
+      ],
+      "id": "3f45884d-bb44-4bba-a1ec-e8c6f3ee6d96",
+      "name": "Respuesta exitosa"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "94219b4a-aa33-4b17-b707-34fa47eed42e",
+              "name": "error",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "e3713d63-4371-4122-9316-9e9466530eea",
+              "name": "mensaje",
+              "value": "Documento inválido, corrupto o con campos críticos incompletos",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1184,
+        96
+      ],
+      "id": "54ad8075-8de6-4b55-ba38-d3ad1031a2d8",
+      "name": "Preparar error"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1392,
+        96
+      ],
+      "id": "18da1ea6-440b-4381-95c6-db3105c2ae8f",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Respuesta exitosa",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Preparar error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Convert to File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert to File": {
+      "main": [
+        [
+          {
+            "node": "Analyze document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze document": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar error": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "e1f5b262-9ab6-43ed-8964-34f29c7fb041",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "9229a67e132f9c7db008a5169ee5e47aadfd6c6c7573f03d309ff1f79f0b7045"
+  },
+  "nodeGroups": [],
+  "id": "QiqtBYz6QaCBcdYA",
+  "tags": []
+}
